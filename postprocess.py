@@ -55,7 +55,7 @@ log_formatter = \
     logging.Formatter('%(levelname)s:%(asctime)s:%(name)s] %(message)s')
 logger = logging.getLogger('AtacWorks-postprocess')
 handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
+handler.setLevel(logging.DEBUG)
 handler.setFormatter(log_formatter)
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
@@ -81,11 +81,17 @@ def parse_args():
                         help='number of decimals to round predicted values')
     parser.add_argument('--num_worker', type=int, default=-1,
                         help='number of worker processes')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug prints')
     args = parser.parse_args()
     return args
 
 
 args = parse_args()
+
+# Set debug mode
+if args.debug:
+    logger.setLevel(logging.DEBUG)
 
 # Load intervals
 logger.info('Loading intervals')
@@ -135,6 +141,8 @@ def writer(batch_range, outfilename):
 
                 # Write to file
                 df_to_bedGraph(batch_bg, outfile)
+            else:
+                logger.debug("No scores > 0 found for batch range {}-{} in file {}".format(start, end, outfilename))
 
 
 def combiner(f1, f2):
@@ -166,6 +174,7 @@ else: # multiprocessing
     pool = mp.Pool(pool_size)
 
     args.tmp_dir = tempfile.mkdtemp()
+    logger.debug("Storing temporary files at {}".format(args.tmp_dir))
     
     tmp_filenames = [os.path.join(args.tmp_dir, "{0:03}".format(i)) for i in range(pool_size)]
     tmp_batch_ranges = [[i*batches_per_process, (i+1)*batches_per_process] for i in range(pool_size)]

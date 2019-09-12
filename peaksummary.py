@@ -57,7 +57,7 @@ args = parse_args()
 
 # Collapse peaks
 _logger.info('Writing peaks to bedGraph file {}.bedGraph'.format(args.prefix))
-subprocess.call(['bigWigToBedGraph', args.peakbw, args.prefix + '.bedGraph'])
+subprocess.check_call(['bigWigToBedGraph', args.peakbw, args.prefix + '.bedGraph'])
 
 # Read collapsed peaks
 _logger.info('Reading peaks')
@@ -92,4 +92,4 @@ peaks.to_csv(args.prefix + '.bed', sep='\t', index=None)
 
 # Delete bedGraph
 _logger.info('Deleting bedGraph file')
-subprocess.call(['rm', args.prefix + '.bedGraph'])
+subprocess.check_call(['rm', args.prefix + '.bedGraph'])

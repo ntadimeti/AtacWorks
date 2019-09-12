@@ -147,6 +147,6 @@ def bedgraph_to_bigwig(bgfile, sizesfile, prefix=None, deletebg=False):
         bwfile = prefix + '.bw'
     else:
         bwfile = os.path.splitext(bgfile)[0] + '.bw'
-    subprocess.call(['bedGraphToBigWig', bgfile, sizesfile, bwfile])
+    subprocess.check_call(['bedGraphToBigWig', bgfile, sizesfile, bwfile])
     if deletebg:
-        subprocess.call(['rm', bgfile])
+        subprocess.check_call(['rm', bgfile])
