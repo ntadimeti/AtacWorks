@@ -135,14 +135,6 @@ def get_model(args, gpu, rank):
         model_params : model parameters
 
     """
-    torch.cuda.set_device(gpu)
-    _logger.debug('Rank %s' % str(rank))
-
-    if args.distributed:
-        dist.init_process_group(backend=args.dist_backend,
-                                init_method=args.dist_url,
-                                world_size=args.world_size, rank=rank)
-
     # Why is model & optimizer built in spawned function?
     resume = (args.weights_path is not None)
     model, model_params = build_model(rank=rank,

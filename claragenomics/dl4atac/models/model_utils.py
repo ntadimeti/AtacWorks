@@ -171,15 +171,5 @@ def build_model(rank, interval_size, resume,
     if resume or infer or evaluate:
         model = load_model(model, weights_path, rank)
 
-    model = model.cuda(gpu)
-
-    if distributed:
-        _logger.info('Compiling model in DistributedDataParallel')
-        model = DistributedDataParallel(model, device_ids=[gpu])
-    elif gpu > 1:
-        _logger.info('Compiling model in DataParallel')
-        model = nn.DataParallel(
-            model, device_ids=list(range(gpu))).cuda()
-
     myprint("Finished building.", color='yellow', rank=rank)
     return model, model_args

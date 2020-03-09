@@ -312,11 +312,6 @@ def main():
 
     _logger.debug(args)
 
-    # check gpu
-    # TODO: add cpu support
-    if not torch.cuda.is_available():
-        raise Exception("No GPU available. Check your machine configuration.")
-
     # all output will be written in the exp_dir folder
     args.exp_dir = make_experiment_dir(
         args.label, args.out_home, timestamp=True)
@@ -410,22 +405,15 @@ def main():
             write_proc.start()
             #############################################################
 
-            ngpus_per_node = torch.cuda.device_count()
+            ngpus_per_node = 1
             # WAR: gloo distributed doesn't work if world size is 1.
             # This is fixed in newer torch version -
             # https://github.com/facebookincubator/gloo/issues/209
-            args.distributed = False if ngpus_per_node == 1 else \
-                args.distributed
+            args.distributed = False 
 
             worker = infer_worker if args.mode == "infer" else eval_worker
-            if args.distributed:
-                args.world_size = ngpus_per_node
-                mp.spawn(worker, nprocs=ngpus_per_node, args=(
-                    ngpus_per_node, args, res_queue), join=True)
-            else:
-                assert_device_available(args.gpu)
-                args.world_size = 1
-                worker(args.gpu, ngpus_per_node, args, res_queue)
+            args.world_size = 1
+            worker(args.gpu, ngpus_per_node, args, res_queue)
 
             # finish off writing
             #############################################################

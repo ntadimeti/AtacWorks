@@ -133,7 +133,7 @@ def load_model(model, weights_path, rank=None):
     try:
         myprint("Loading model weights from {}...".format(weights_path),
                 color='yellow', rank=rank)
-        checkpoint = torch.load(weights_path, map_location="cuda:" + str(rank))
+        checkpoint = torch.load(weights_path, map_location="cpu")
         model.load_state_dict(checkpoint['state_dict'])
         myprint("Finished loading.", color='yellow', rank=rank)
     except (OSError, ValueError) as e:

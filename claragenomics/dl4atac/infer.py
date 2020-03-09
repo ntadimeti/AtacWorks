@@ -60,7 +60,6 @@ def infer(*, rank, gpu, task, model, infer_loader, print_freq,
                 x = x.unsqueeze(1)  # (N, 1, L)
             else:
                 x = np.swapaxes(x, 1, 2)
-            x = x.cuda(gpu, non_blocking=True)
             count += x.shape[0]
 
             # transform coverage track if required
