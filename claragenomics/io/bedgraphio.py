@@ -12,9 +12,12 @@
 
 # Import requirements
 import pandas as pd
+import cudf
+from numba import cuda
+import numpy as np
+import sys
 
-
-def expand_interval(interval, score=True):
+def add_chrom(interval, score=True):
     """Expand an interval to single-base resolution and add scores.
 
     Args:
@@ -28,50 +31,32 @@ def expand_interval(interval, score=True):
         interval
 
     """
-    expanded = pd.DataFrame(columns=['chrom', 'start'])
-    expanded['start'] = range(interval['start'], interval['end'])
-    expanded['end'] = expanded['start'] + 1
-    expanded['chrom'] = interval['chrom']
-    # If necessary, assign a score to each base in the interval
-    if score:
-        expanded['score'] = interval['scores']
-    return expanded
+    chrom_add = pd.DataFrame()
+    size = interval['end'] - interval['start']
+    chrom_add['chrom'] = [interval['chrom']]*size
+    return chrom_add
 
 
-def contract_interval(expanded_df, positive=True):
-    """Contract a dataframe containing genomic positions.
-
-    Scores into smaller intervals with equal score.
-
-    Args:
-        expanded_df: Pandas dataframe containing chrom, start, end, score at
-        base resolution.
-        positive : if True, only regions with score>0 are retained.
-
-    Returns:
-        intervals_df: Pandas dataframe with same columns; bases with same
-        score are combined into one line.
-
-    """
-    # For each base, attach the score assigned to the previous base
-    expanded_df['prevscore'] = [-1] + list(expanded_df['score'])[:-1]
-    # Select bases where score changes - or the last base
-    intervals_df = expanded_df[
-        (expanded_df['score'] != expanded_df['prevscore']) | (
-            expanded_df.index == len(expanded_df) - 1)].copy()
-    # Each interval ends at the next point where the score changes,
-    # or at the last base
-    intervals_df['end'] = list(intervals_df['start'])[1:] + [
-        intervals_df['end'].iloc[-1]]
-    # Only keep intervals where score > 0
-    if positive:
-        intervals_df = intervals_df[intervals_df['score'] > 0]
-    if len(intervals_df) > 0:
-        intervals_df = intervals_df.loc[:, ['chrom', 'start', 'end', 'score']]
-        return intervals_df
+@cuda.jit
+def expand_interval(in_col, in_col2, out_col, out_col2):
+    i = cuda.grid(1)
+    if i < in_col.size: # boundary guard
+        for j in range(in_col[i], in_col2[i]):
+            out_col[j] = j
+            out_col2[j] = j + 1
 
 
-def intervals_to_bg(intervals_df):
+@cuda.jit
+def get_diff(in1, diff):
+    i = cuda.grid(1)
+    if i < in1.size: # boundary guard
+        if i == 0:
+            diff[i] = 2
+        else:
+            diff[i] = in1[i] - in1[i-1]
+
+
+def intervals_to_bg(intervals_df, mode):
     """Format intervals + scores to bedGraph format.
 
     Args:
@@ -82,13 +67,48 @@ def intervals_to_bg(intervals_df):
         bg: pandas dataframe containing expanded+contracted intervals.
 
     """
-    # Expand each interval to single-base resolution and add scores
-    bg = intervals_df.apply(expand_interval, axis=1)
-    # Contract regions where score is the same
-    bg = bg.apply(contract_interval)
-    # Combine into single pandas df
-    bg = pd.concat(list(bg))
-    return bg
+    if mode == "expand":
+        # Add chromosome column separately because cudf doesn't support
+        # string operations.
+        chrom_df = intervals_df.apply(add_chrom, axis = 1)
+        chrom_df = pd.concat(list(chrom_df), ignore_index=True)
+        # Convert pandas df to cuda and expand intervals.
+        intervals_df_cuda = cudf.from_pandas(intervals_df)
+        df = cudf.DataFrame()
+        size = intervals_df_cuda['end'][-1] - intervals_df_cuda['start'][0]
+        df['start'] = np.zeros(size, dtype=np.int64)
+        df['end'] = np.zeros(size, dtype=np.int64)
+        expand_interval.forall(size)(intervals_df_cuda['start'],
+                            intervals_df_cuda['end'],
+                            df['start'],
+                            df['end'])
+
+        # Convert the df back to pandas and join the chrom df.
+        bg = df.to_pandas()
+        bg['chrom'] = chrom_df['chrom']
+        return bg
+    elif mode == "contract":
+        # Create a new column with scores moved one row up and calculate diff
+        # between new scores and original scores. Rows where diff is non-zero 
+        # will be rows where score has changed.
+
+        intervals_df["diff"] = 0
+
+        cudf_file = cudf.from_pandas(intervals_df)
+        size = len(cudf_file['scores'])
+        get_diff.forall(size)(cudf_file['scores'], cudf_file['diff'])
+
+        #Choose cols with diff > 0
+        less_bg = cudf_file[(cudf_file['diff'] != 0) | (cudf_file.index == len(cudf_file) - 1)].copy()
+
+        # Modify end column.
+        less_bg['end'] = list(less_bg['start'])[1:] + \
+                                [less_bg['end'].iloc[-1]]
+
+        # Keep scores > 0 and keep relevant cols
+        bg = less_bg.loc[:, ['chrom', 'start', 'end', 'scores']]
+        bg = bg.to_pandas()
+        return bg
 
 
 def df_to_bedGraph(df, outfile, sizes=None):

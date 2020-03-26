@@ -43,6 +43,8 @@ import torch.multiprocessing as mp
 
 from worker import eval_worker, infer_worker, train_worker
 
+import cudf
+
 warnings.filterwarnings("ignore")
 
 # Set up logging
@@ -123,15 +125,18 @@ def save_to_bedgraph(batch_range, item, task, channel, intervals,
     if (scores > 0).any():
         # Select intervals corresponding to batch
         batch_intervals = intervals.iloc[keys.numpy()[start:end], :].copy()
+        batch_bg = intervals_to_bg(batch_intervals, "expand")
+        scores = scores.flatten()
+        scores = np.squeeze(scores).tolist()
         # Add scores to each interval
-        batch_intervals['scores'] = np.split(scores, scores.shape[0])
-        batch_intervals['scores'] = [x[0] for x in batch_intervals['scores']]
+        batch_bg["scores"] = scores
+        # Add scores to each interval
         # Select intervals with scores>0
-        batch_intervals = batch_intervals.loc[scores.sum(axis=1) > 0, :]
+        batch_bg_contract = intervals_to_bg(batch_bg, "contract")
+        batch_bg_contract = batch_bg_contract.loc[batch_bg_contract['scores'] > 0, :]
 
         # Expand each interval, combine with scores, and contract to smaller
         # intervals
-        batch_bg = intervals_to_bg(batch_intervals)
         df_to_bedGraph(batch_bg, outfile)
 
 
@@ -187,6 +192,7 @@ def writer(infer, intervals_file, exp_dir, result_fname,
 
     # Temp dir used to save temp files during multiprocessing.
     temp_dir = tempfile.mkdtemp()
+    print ("temp_dir", temp_dir)
     for channel in channels:
         os.makedirs(os.path.join(temp_dir, str(channel)))
 
@@ -266,6 +272,7 @@ def writer(infer, intervals_file, exp_dir, result_fname,
 
                 pool.close()
                 pool.join()
+                
 
     if num_workers != 0:
         for channel in channels:
@@ -390,6 +397,7 @@ def main():
             prefix = os.path.basename(infile).split(".")[0]
             # setup queue and kick off writer process
             #############################################################
+            #Set spawning context.
             manager = mp.Manager()
             res_queue = manager.Queue()
             # Create a keyword argument dictionary to pass into the
@@ -408,7 +416,8 @@ def main():
                             "sizes_file": args.sizes_file,
                             "res_queue": res_queue, "prefix": prefix,
                             "deletebg": args.deletebg}
-            write_proc = mp.Process(target=writer, kwargs=keyword_args)
+            ctx = mp.get_context('spawn')
+            write_proc = ctx.Process(target=writer, kwargs=keyword_args)
             write_proc.start()
             #############################################################
 
