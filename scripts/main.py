@@ -43,8 +43,6 @@ import torch.multiprocessing as mp
 
 from worker import eval_worker, infer_worker, train_worker
 
-import cudf
-
 warnings.filterwarnings("ignore")
 
 # Set up logging
@@ -125,20 +123,20 @@ def save_to_bedgraph(batch_range, item, task, channel, intervals,
     if (scores > 0).any():
         # Select intervals corresponding to batch
         batch_intervals = intervals.iloc[keys.numpy()[start:end], :].copy()
-        batch_bg = intervals_to_bg(batch_intervals, "expand")
+        batch_size = len(batch_intervals)
+        batch_bg = intervals_to_bg(batch_intervals, "expand", batch_size)
         scores = scores.flatten()
         scores = np.squeeze(scores).tolist()
         # Add scores to each interval
         batch_bg["scores"] = scores
         # Add scores to each interval
         # Select intervals with scores>0
-        batch_bg_contract = intervals_to_bg(batch_bg, "contract")
+        batch_bg_contract = intervals_to_bg(batch_bg, "contract", batch_size)
         batch_bg_contract = batch_bg_contract.loc[batch_bg_contract['scores'] > 0, :]
 
         # Expand each interval, combine with scores, and contract to smaller
         # intervals
-        df_to_bedGraph(batch_bg, outfile)
-
+        df_to_bedGraph(batch_bg_contract, outfile)
 
 def writer(infer, intervals_file, exp_dir, result_fname,
            task, num_workers, infer_threshold, reg_rounding, cla_rounding,
@@ -192,7 +190,6 @@ def writer(infer, intervals_file, exp_dir, result_fname,
 
     # Temp dir used to save temp files during multiprocessing.
     temp_dir = tempfile.mkdtemp()
-    print ("temp_dir", temp_dir)
     for channel in channels:
         os.makedirs(os.path.join(temp_dir, str(channel)))
 

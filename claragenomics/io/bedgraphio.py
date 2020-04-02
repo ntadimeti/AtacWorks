@@ -38,25 +38,34 @@ def add_chrom(interval, score=True):
 
 
 @cuda.jit
-def expand_interval(in_col, in_col2, out_col, out_col2):
+def expand_interval(in_col, in_col2, out_col, out_col2, interval_size):
     i = cuda.grid(1)
     if i < in_col.size: # boundary guard
+        cnt = 0
         for j in range(in_col[i], in_col2[i]):
-            out_col[j] = j
-            out_col2[j] = j + 1
-
+            idx = interval_size*i
+            out_col[idx + cnt] = j
+            out_col2[idx + cnt] = j + 1
+            cnt = cnt + 1
 
 @cuda.jit
-def get_diff(in1, diff):
+def get_prev_score(in1, prev, interval_size):
     i = cuda.grid(1)
     if i < in1.size: # boundary guard
-        if i == 0:
-            diff[i] = 2
+        if i%interval_size == 0 :
+            prev[i] = -1
         else:
-            diff[i] = in1[i] - in1[i-1]
+            prev[i] = in1[i-1]
+
+@cuda.jit
+def modify_end(start, end, interval_size):
+    i = cuda.grid(1)
+    if i < start.size: # boundary guard
+        if start[i+1]%interval_size != 0 :
+            end[i] = start[i+1]
 
 
-def intervals_to_bg(intervals_df, mode):
+def intervals_to_bg(intervals_df, mode, batch_size):
     """Format intervals + scores to bedGraph format.
 
     Args:
@@ -75,35 +84,38 @@ def intervals_to_bg(intervals_df, mode):
         # Convert pandas df to cuda and expand intervals.
         intervals_df_cuda = cudf.from_pandas(intervals_df)
         df = cudf.DataFrame()
-        size = intervals_df_cuda['end'][-1] - intervals_df_cuda['start'][0]
+        interval_size = intervals_df_cuda['end'][0] - intervals_df_cuda['start'][0]
+        size = batch_size*interval_size
         df['start'] = np.zeros(size, dtype=np.int64)
         df['end'] = np.zeros(size, dtype=np.int64)
         expand_interval.forall(size)(intervals_df_cuda['start'],
                             intervals_df_cuda['end'],
                             df['start'],
-                            df['end'])
+                            df['end'],
+                            interval_size)
 
         # Convert the df back to pandas and join the chrom df.
-        bg = df.to_pandas()
-        bg['chrom'] = chrom_df['chrom']
-        return bg
+        #bg = df.to_pandas()
+        df.insert(0, 'chrom', chrom_df['chrom'])
+        return df
     elif mode == "contract":
         # Create a new column with scores moved one row up and calculate diff
         # between new scores and original scores. Rows where diff is non-zero 
         # will be rows where score has changed.
 
-        intervals_df["diff"] = 0
-
-        cudf_file = cudf.from_pandas(intervals_df)
-        size = len(cudf_file['scores'])
-        get_diff.forall(size)(cudf_file['scores'], cudf_file['diff'])
-
+        intervals_df["prev_score"] = 0
+        size = len(intervals_df['scores'])
+        interval_size = size/batch_size
+        get_prev_score.forall(size)(intervals_df['scores'], intervals_df['prev_score'], interval_size)
         #Choose cols with diff > 0
-        less_bg = cudf_file[(cudf_file['diff'] != 0) | (cudf_file.index == len(cudf_file) - 1)].copy()
+        pd_file = intervals_df.to_pandas()
+        #intervals_df.to_csv("contract_df.bedGraph", sep='\t', header=None)
+        less_bg = pd_file.loc[pd_file['scores'] != pd_file['prev_score'],:].copy()
 
+        less_bg = cudf.from_pandas(less_bg)
         # Modify end column.
-        less_bg['end'] = list(less_bg['start'])[1:] + \
-                                [less_bg['end'].iloc[-1]]
+        size = len(less_bg['start'])
+        modify_end.forall(size)(less_bg['start'], less_bg['end'], interval_size)
 
         # Keep scores > 0 and keep relevant cols
         bg = less_bg.loc[:, ['chrom', 'start', 'end', 'scores']]
