@@ -43,6 +43,8 @@ import torch.multiprocessing as mp
 
 from worker import eval_worker, infer_worker, train_worker
 
+import cudf
+
 warnings.filterwarnings("ignore")
 
 # Set up logging
@@ -132,7 +134,7 @@ def save_to_bedgraph(batch_range, item, task, channel, intervals,
         # Add scores to each interval
         # Select intervals with scores>0
         batch_bg_contract = intervals_to_bg(batch_bg, "contract", batch_size)
-        batch_bg_contract = batch_bg_contract.loc[batch_bg_contract['scores'] > 0, :]
+        batch_bg_contract = batch_bg_contract.loc[batch_bg_contract["scores"] > 0, :]
 
         # Expand each interval, combine with scores, and contract to smaller
         # intervals
@@ -176,6 +178,8 @@ def writer(infer, intervals_file, exp_dir, result_fname,
                             usecols=(0, 1, 2),
                             dtype={'chrom': str, 'start': int, 'end': int})
 
+    intervals = cudf.from_pandas(intervals)
+
     channels = []
     out_base_path = os.path.join(exp_dir, prefix + "_" + result_fname)
     if task == "regression":
@@ -197,7 +201,7 @@ def writer(infer, intervals_file, exp_dir, result_fname,
     while True:
         if not res_queue.empty():
             batch_num = batch_num + 1
-            item = res_queue.get()
+            item = res_queue.get_nowait()
             if item == 'done':
                 break
             keys, batch = item
@@ -206,11 +210,11 @@ def writer(infer, intervals_file, exp_dir, result_fname,
                 start = 0
                 end = batch.shape[0]
                 for channel in channels:
-                    with open(outfiles[channel], "a+") as outfile:
+                   with open(outfiles[channel], "a+") as outfile:
                         save_to_bedgraph([start, end], item, task, channel,
-                                         intervals, outfile,
-                                         rounding=rounding[channel],
-                                         threshold=infer_threshold)
+                                       intervals, outfile,
+                                       rounding=rounding[channel],
+                                       threshold=infer_threshold)
             else:
                 num_jobs = math.ceil(batch.shape[0] / batches_per_worker)
                 pool_size = 0
@@ -269,6 +273,7 @@ def writer(infer, intervals_file, exp_dir, result_fname,
 
                 pool.close()
                 pool.join()
+            res_queue.task_done()
                 
 
     if num_workers != 0:
